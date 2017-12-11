@@ -17,7 +17,7 @@ import torch.optim as optim
 import torch.backends.cudnn as cudnn
 
 from torch.autograd import Variable
-from utils import progress_bar
+#from utils import progress_bar
 
 def fasttext_model_pretraining():
     '''
@@ -135,11 +135,11 @@ def price_preprocessing(symbol, time_info, time_interval, directory = 'datasetq/
             while target_time not in idx:
                 target_time = (datetime.strptime(target_time, fmt) + timedelta(days=1)).strftime(fmt)
             # set label
-            label = 0
-            if price_data[target_time] > price_data[t]:
+            label = 0   # 0: stay; 1: down; 2: up
+            if price_data[target_time] > price_data[t]: # up
+                label = 2
+            elif price_data[target_time] < price_data[t]:   # down
                 label = 1
-            elif price_data[target_time] < price_data[t]:
-                label = -1
             #price = price_data[target_time]
             if str(delta) in targets_dict:
                 targets_dict[str(delta)].append(label)
@@ -167,11 +167,11 @@ def data_division(data, window_size):
 
     train_dataset = []
     for xtr, ytr in zip(xtrain, ytrain):
-        train_dataset.append((xtr,ytr))
+        train_dataset.append((xtr, [ytr]))
 
     test_dataset = []
     for xtr, ytr in zip(xtest, ytest):
-        test_dataset.append((xtr, ytr))
+        test_dataset.append((xtr, [ytr]))   # label should be list
 
     return train_dataset, test_dataset
 
@@ -196,13 +196,17 @@ def train(net, use_cuda=False):
     total = 0
     correct = 0
     for batch_idx, (inputs, targets) in enumerate(train_dataset):
+        print len(inputs)
+        print targets
         if use_cuda:
             inputs, targets = inputs.cuda(), targets.cuda()
         optimizer.zero_grad()
-        targets = Variable(torch.Tensor(targets))
+        targets = Variable(torch.LongTensor(targets))
         outputs = net(inputs)
+        print outputs.size(), targets.size()
         loss = criterion(outputs, targets)
-        loss.backward()
+        print 'loss = ',loss
+        loss.backward(retain_graph=True)
         optimizer.step()
 
         train_loss += loss.data[0]
@@ -211,8 +215,9 @@ def train(net, use_cuda=False):
         total += targets.size(0)
         correct += predicted.eq(targets.data).cpu().sum()
 
-        progress_bar(batch_idx, len(train_dataset), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
-                     % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
+        print 'batch_idx = %d, loss: %.3f | Acc: %.3f%% (%d/%d)' % (batch_idx, train_loss/(batch_idx+1), 100.0*correct/total, correct, total)
+        #progress_bar(batch_idx, len(train_dataset), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
+        #             % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
 
 def test(net, test_dataset, use_cuda=False):
     net.eval()
@@ -232,8 +237,10 @@ def test(net, test_dataset, use_cuda=False):
         total += targets.size(0)
         correct += predicted.eq(targets.data).cpu().sum()
 
-        progress_bar(batch_idx, len(test_dataset), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
-                     % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
+        print 'batch_idx = %d, loss: %.3f | Acc: %.3f%% (%d/%d)' % (batch_idx, test_loss/(batch_idx+1), 100.0*correct/total, correct, total)
+
+        #progress_bar(batch_idx, len(test_dataset), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
+        #             % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
 
 
 
@@ -253,7 +260,7 @@ class LSTMModel(nn.Module):
         for seq in sequences:
             seq_len = len(seq)
             out, self.hidden = self.lstm(Variable(torch.Tensor(seq).view(seq_len, 1, -1)), self.hidden)
-        output = self.softmax(self.linear(self.hidden))
+        output = self.softmax(self.linear(self.hidden[0][0]))
         return output
 
     def init_hidden(self):
@@ -305,7 +312,7 @@ if __name__ == '__main__':
 
     # build model
     print 'Building model...'
-    net = LSTMModel(100,200,80)
+    net = LSTMModel(100,200,3)
 
     if use_cuda:
         net.cuda()
@@ -317,8 +324,8 @@ if __name__ == '__main__':
     optimizer = optim.SGD(net.parameters(), lr=0.1, momentum=0.9, weight_decay=5e-4)
 
     for epoch in range(0, 100):
-        train(net, epoch)
-        test(net, epoch)
+        train(net)
+        test(net)
 
     print 'Finish...'
 
