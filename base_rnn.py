@@ -4,6 +4,7 @@ import string
 import pytz
 import pandas as pd
 import cPickle
+import time
 from datetime import datetime, timedelta
 
 import fasttext
@@ -27,6 +28,9 @@ def fasttext_model_pretraining():
     directory = 'summary/'
     if os.path.isdir(directory):
         files = [directory+f for f in os.listdir(directory) if f.endswith('.xlsx')]
+    else:
+        print 'Summary directory Not Found!'
+        return
     alltext = 'alltext.txt'
     if os.path.exists(alltext):
         os.remove(alltext)
@@ -54,7 +58,7 @@ def fasttext_model_pretraining():
     return model
 
 
-def summary_preprocessing(symbol, model, directory = 'datasetq/'):
+def summary_preprocessing(symbol, model, directory = 'dataset/'):
     '''
     load summaries for the symbol
     :param symbol: stock symbol
@@ -114,7 +118,7 @@ def summary_preprocessing(symbol, model, directory = 'datasetq/'):
 
 #summary_info, time_info, author_info = summary_preprocessing(symbol='BHP',model=model)
 
-def price_preprocessing(symbol, time_info, time_interval, directory = 'datasetq/'):
+def price_preprocessing(symbol, time_info, time_interval, directory = 'dataset/'):
     # read stock price information from price_file
     price_file = directory + symbol + '.csv'
     dateparse = lambda dates: pd.datetime.strptime(dates, '%Y-%m-%d')
@@ -158,7 +162,7 @@ def data_division(data, window_size):
         y.append(targets[index+window_size-1])
 
     # divide into training and test dataset
-    row = round(0.9 * len(x))
+    row = round(0.8 * len(x))
     xtrain = x[:int(row)]
     ytrain = y[:int(row)]
 
@@ -196,17 +200,16 @@ def train(net, use_cuda=False):
     total = 0
     correct = 0
     for batch_idx, (inputs, targets) in enumerate(train_dataset):
-        print len(inputs)
-        print targets
         if use_cuda:
             inputs, targets = inputs.cuda(), targets.cuda()
         optimizer.zero_grad()
         targets = Variable(torch.LongTensor(targets))
         outputs = net(inputs)
-        print outputs.size(), targets.size()
         loss = criterion(outputs, targets)
         print 'loss = ',loss
-        loss.backward(retain_graph=True)
+        start_time =  time.time()
+        loss.backward()
+        print 'spent time backward = ', time.time() - start_time
         optimizer.step()
 
         train_loss += loss.data[0]
@@ -219,7 +222,7 @@ def train(net, use_cuda=False):
         #progress_bar(batch_idx, len(train_dataset), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
         #             % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
 
-def test(net, test_dataset, use_cuda=False):
+def test(net, use_cuda=False):
     net.eval()
     test_loss = 0
     correct = 0
@@ -228,7 +231,7 @@ def test(net, test_dataset, use_cuda=False):
         if use_cuda:
             inputs, targets = inputs.cuda(), targets.cuda()
         optimizer.zero_grad()
-        targets = Variable(torch.Tensor(targets))
+        targets = Variable(torch.LongTensor(targets))
         outputs = net(inputs)
         loss = criterion(outputs, targets)
 
@@ -250,13 +253,14 @@ class LSTMModel(nn.Module):
         self.input_size = input_size
         self.hidden_size = hidden_size
 
-        self.hidden = self.init_hidden()
+        #self.hidden = self.init_hidden()
         self.lstm = nn.LSTM(input_size, hidden_size)
         self.linear = nn.Linear(hidden_size, output_size)
         self.softmax = nn.LogSoftmax()
 
     def forward(self, sequences):
         # sequence: (seq_number, seq_len, input_size)
+        self.hidden = self.init_hidden()
         for seq in sequences:
             seq_len = len(seq)
             out, self.hidden = self.lstm(Variable(torch.Tensor(seq).view(seq_len, 1, -1)), self.hidden)
@@ -298,13 +302,16 @@ if __name__ == '__main__':
         with open(symbol + '_test.pkl', 'r') as f:
             test_dataset = cPickle.load(f)
     else:
-        train_dataset, test_dataset = data_loader('BHP', model, 'datasetq/')
+        train_dataset, test_dataset = data_loader(symbol, model, 'dataset/')
         print 'saving dataset into pkl files.'
         with open(symbol+'_train.pkl', 'w') as f:
             cPickle.dump(train_dataset, f)
         with open(symbol+'_test.pkl', 'w') as f:
             cPickle.dump(test_dataset, f)
 
+    #train_dataset = train_dataset[:10]
+    print '#sample in training dataset is ', len(train_dataset)
+    print '#sample in test dataset is ', len(test_dataset)
 
     # Check the save_dir exists or not
     # if not os.path.exists(args.save_dir):
@@ -324,6 +331,7 @@ if __name__ == '__main__':
     optimizer = optim.SGD(net.parameters(), lr=0.1, momentum=0.9, weight_decay=5e-4)
 
     for epoch in range(0, 100):
+        print 'Epoch %d' % epoch
         train(net)
         test(net)
 
