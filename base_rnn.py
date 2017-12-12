@@ -58,6 +58,21 @@ def fasttext_model_pretraining():
     return model
 
 
+def trend(target_price, basic_price, threshold = 0.01):
+    '''
+    :param target_price: price after time interval
+    :param basic_price: price when predicting
+    :param threshold: threshold of price changes
+    :return: label of trend. 0: stay; 1: down; 2: up
+    '''
+    percent = (target_price -  basic_price) / basic_price
+    if percent >= threshold:
+        return 2
+    elif percent <= -threshold:
+        return 1
+    else:
+        return 0
+
 def summary_preprocessing(symbol, model, directory = 'dataset/'):
     '''
     load summaries for the symbol
@@ -138,13 +153,11 @@ def price_preprocessing(symbol, time_info, time_interval, directory = 'dataset/'
             # if market is not open at target_time, then target_time+1
             while target_time not in idx:
                 target_time = (datetime.strptime(target_time, fmt) + timedelta(days=1)).strftime(fmt)
+
             # set label
-            label = 0   # 0: stay; 1: down; 2: up
-            if price_data[target_time] > price_data[t]: # up
-                label = 2
-            elif price_data[target_time] < price_data[t]:   # down
-                label = 1
-            #price = price_data[target_time]
+            label = trend(price_data[target_time], price_data[t])
+
+            # save label into targets_dict
             if str(delta) in targets_dict:
                 targets_dict[str(delta)].append(label)
             else:
@@ -218,7 +231,7 @@ def train(net, use_cuda=False):
         total += targets.size(0)
         correct += predicted.eq(targets.data).cpu().sum()
 
-        print 'batch_idx = %d, loss: %.3f | Acc: %.3f%% (%d/%d)' % (batch_idx, train_loss/(batch_idx+1), 100.0*correct/total, correct, total)
+    print 'batch_idx = %d, loss: %.3f | Acc: %.3f%% (%d/%d)' % (batch_idx, train_loss/(batch_idx+1), 100.0*correct/total, correct, total)
         #progress_bar(batch_idx, len(train_dataset), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
         #             % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
 
@@ -240,7 +253,7 @@ def test(net, use_cuda=False):
         total += targets.size(0)
         correct += predicted.eq(targets.data).cpu().sum()
 
-        print 'batch_idx = %d, loss: %.3f | Acc: %.3f%% (%d/%d)' % (batch_idx, test_loss/(batch_idx+1), 100.0*correct/total, correct, total)
+    print 'batch_idx = %d, loss: %.3f | Acc: %.3f%% (%d/%d)' % (batch_idx, test_loss/(batch_idx+1), 100.0*correct/total, correct, total)
 
         #progress_bar(batch_idx, len(test_dataset), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
         #             % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
@@ -268,8 +281,11 @@ class LSTMModel(nn.Module):
         return output
 
     def init_hidden(self):
-        return (Variable(torch.zeros(1, 1, self.hidden_size)),
+        result = (Variable(torch.zeros(1, 1, self.hidden_size)),
                 Variable(torch.zeros(1, 1, self.hidden_size)))
+        if use_cuda:
+            return result.cuda()
+        return
 
 
 if __name__ == '__main__':
@@ -332,8 +348,10 @@ if __name__ == '__main__':
 
     for epoch in range(0, 100):
         print 'Epoch %d' % epoch
+        epoch_start = time.time()
         train(net)
         test(net)
+        print 'Each epoch costs ', time.time() - epoch_start
 
     print 'Finish...'
 
