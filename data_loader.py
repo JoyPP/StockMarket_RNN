@@ -275,27 +275,54 @@ def data_division(data, batch_size, window_size):
         xsample.append(inputs[index: index + window_size])  # (#sample, window_size, feature_dim)
         ysample.append(targets[index + window_size - 1])    # (#sample, )
 
-    x, y = [],[]
-    n_batch = len(xsample) // batch_size
-    for b in range(n_batch):
-        x.append(xsample[b*batch_size: (b+1)*batch_size])    # (n_batch, batch_size, window_size, feature_dim)
-        y.append(ysample[b*batch_size: (b+1)*batch_size])   # (n_batch, batch_size, 1)
+    n_sample = len(xsample)
+    n_batch = n_sample // batch_size
+    xsample = xsample[n_sample - n_batch*batch_size:]   # keep the newest data
+    ysample = ysample[n_sample - n_batch*batch_size:]
 
     # divide into training and test dataset
-    row = round(0.8 * len(x))
-    xtrain = x[:int(row)]
-    ytrain = y[:int(row)]
+    row = round(0.8 * n_batch)
+    train_samples = xsample[:int(row)*batch_size]
+    train_labels = ysample[:int(row)*batch_size]
 
-    xtest = x[int(row):]
-    ytest = y[int(row):]
+    test_samples = xsample[int(row)*batch_size:]
+    test_labels = ysample[int(row)*batch_size:]
+
+    # transfer to numpy.array
+    train_samples = np.array(train_samples, dtype=np.float32)
+    train_labels = np.array(train_labels, dtype=np.int32)
+    test_samples = np.array(test_samples, dtype=np.float32)
+    test_labels = np.array(test_labels, dtype=np.int32)
+
+    train_num = train_samples.shape[0]
+    test_num = test_samples.shape[0]
+
+    # shuffling data
+    train_idx = np.arange(train_num, dtype=np.int32)
+    np.random.shuffle(train_idx)
+    np.take(train_samples, train_idx, axis=0, out=train_samples)
+    np.take(train_labels, train_idx, axis=0, out=train_labels)
+    train_samples = train_samples.tolist()
+    train_labels = train_labels.tolist()
+
+    test_idx = np.arange(test_num, dtype=np.int32)
+    np.random.shuffle(test_idx)
+    np.take(test_samples, test_idx, axis=0, out=test_samples)
+    np.take(test_labels, test_idx, axis=0, out=test_labels)
+    test_samples = test_samples.tolist()
+    test_labels = test_labels.tolist()
 
     train_dataset = []
-    for xtr, ytr in zip(xtrain, ytrain):
-        train_dataset.append((xtr, ytr))
+    for b in range(int(row)):
+        x = train_samples[b*batch_size: (b+1)*batch_size]    # (train_batch, batch_size, window_size, feature_dim)
+        y = train_labels[b*batch_size: (b+1)*batch_size]   # (train_batch, batch_size, 1)
+        train_dataset.append((x, y))
 
     test_dataset = []
-    for xtr, ytr in zip(xtest, ytest):
-        test_dataset.append((xtr, ytr))  # label should be list
+    for b in range(n_batch-int(row)):
+        x = test_samples[b*batch_size: (b+1)*batch_size]    # (test_batch, batch_size, window_size, feature_dim)
+        y = test_labels[b*batch_size: (b+1)*batch_size]   # (test_batch, batch_size, 1)
+        test_dataset.append((x, y))
 
     return train_dataset, test_dataset
 
