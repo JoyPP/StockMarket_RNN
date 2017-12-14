@@ -1,0 +1,330 @@
+import os
+import string
+import pytz
+import fasttext
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from datetime import datetime, timedelta
+from openpyxl.reader.excel import load_workbook
+
+
+def fasttext_model_pretraining():
+    '''
+    use all extracted text to train fasttext model, saved into model.bin
+    :return:
+    '''
+    directory = 'summary/'
+    if os.path.isdir(directory):
+        files = [directory+f for f in os.listdir(directory) if f.endswith('.xlsx')]
+    else:
+        print 'Summary directory Not Found!'
+        return
+    alltext = 'alltext.txt'
+    if os.path.exists(alltext):
+        os.remove(alltext)
+    translator = string.maketrans(string.punctuation, " " * len(string.punctuation))
+    for f in files:
+        print 'file is ', f
+        wb = load_workbook(filename=f)
+        ws = wb.get_active_sheet()
+        row, col = ws.max_row, ws.max_column
+        col_dict = {1:'A', 2:'B', 3:'C',4:'D', 5:'E', 6:'F', 7: 'G', 8:'H', 9:'I', 10:'J',11:'K',12:'L',13:'M',14:'N'}
+        col_range = [1] + range(5, col + 1)
+        tmp = ""
+        for i in range(2, row+1):
+            for j in col_range:
+                val = ws[col_dict[j]+str(i)].value
+                if val is not None:
+                    tmp += val + '\n'
+            if i%100 == 0:
+                with open(alltext, 'a') as fd:
+                    fd.write(tmp.encode('utf-8').translate(translator))
+                tmp = ""
+        with open(alltext, 'a') as fd:
+            fd.write(tmp.encode('utf-8').translate(translator))
+    model = fasttext.skipgram(alltext, 'model')
+    return model
+
+def pair(symbol, bin_size=5, show = False, directory='summary/'):
+    print 'loading data for ', symbol
+    summary_file = directory + symbol + '.xlsx'
+    wb = load_workbook(filename=summary_file)
+    ws = wb.get_active_sheet()
+    row, col = ws.max_row, ws.max_column
+    time_list = []
+    time_diff = []
+    for i in range(2, row+1):
+        t = ws['C' + str(i)].value.encode('utf-8')
+        YY, MM, DD, hh, mm, ss = int(t[:4]), int(t[5:7]), int(t[8:10]), int(t[11:13]), int(t[14:16]), int(t[17:19])
+        utc_dt = datetime(YY, MM, DD, hh, mm, ss)
+        if len(time_list) > 0:
+            time_diff.append((time_list[-1] - utc_dt).total_seconds()/24/3600.0)
+        time_list.append(utc_dt)
+    bins = np.arange(0, 365, bin_size)  # fixed bin size
+    plt.xlim([0, max(time_diff) + bin_size])
+    plt.hist(time_diff, bins=bins, alpha=0.5)
+    plt.title('Time Interval for ' + symbol)
+    plt.xlabel('Days (bin size = %d)'%bin_size)
+    plt.ylabel('Count')
+    if show:
+        plt.show()
+    else:
+        plt.savefig('time_diff/'+symbol + '_time_interval.png')
+        plt.show()
+
+
+def trend(target_price, basic_price, threshold = 0.01):
+    '''
+    :param target_price: price after time interval
+    :param basic_price: price when predicting
+    :param threshold: threshold of price changes
+    :return: label of trend. 0: stay; 1: down; 2: up
+    '''
+    percent = (target_price -  basic_price) / basic_price
+    if percent >= threshold:
+        return 2
+    elif percent <= -threshold:
+        return 1
+    else:
+        return 0
+
+def summary_preprocessing(symbol, model, directory = 'dataset/'):
+    '''
+    load summaries for the symbol
+    :param symbol: stock symbol
+    :return: summary_info, time_info, author_info saving summary, time, author information respectively
+    '''
+    print 'Loading data for', symbol
+    # read article information from summary_file
+    summary_file = directory + symbol + '.xlsx'
+    wb = load_workbook(filename=summary_file)
+    ws = wb.get_active_sheet()
+    row, col = ws.max_row, ws.max_column    # get max row and column number
+    col_dict = {1: 'A', 2: 'B', 3: 'C', 4: 'D', 5: 'E', 6: 'F', 7: 'G', 8: 'H', 9: 'I', 10: 'J', 11: 'K', 12: 'L',
+                13: 'M', 14: 'N'}
+    col_range = [1] + range(5, col + 1) # related column number
+    # transfer all punctuations to whitespace
+    translator = string.maketrans(string.punctuation, " " * len(string.punctuation))
+    # transfer timezone from utc to US/Eastern timezone
+    utc = pytz.utc
+    eastern = pytz.timezone('US/Eastern')
+    fmt = '%Y-%m-%d %H:%M:%S %Z%z'
+    # list to save summary vector, US/Eastern time, and author information respectively
+    summary_info, time_info, author_info = [], [], []
+    # read summary_file
+    for i in range(2, row + 1):
+        # read summary and save its vector matrix into the summary_info
+        summary = ""
+        for j in col_range:
+            val = ws[col_dict[j]+str(i)].value
+            if val is not None:
+                summary += val.encode('utf-8').translate(translator) + ' '  # without eliminating punctuation
+        words = summary.split()
+        summary = [model[w] for w in words]
+        summary_info.append(summary)
+        # read time and transfer it to US/Eastern Timezone and save it into the time_info
+        t = ws['C'+str(i)].value.encode('utf-8')
+        YY, MM, DD, hh, mm, ss = int(t[:4]), int(t[5:7]), int(t[8:10]), int(t[11:13]), int(t[14:16]), int(t[17:19])
+        utc_dt = datetime(YY, MM, DD, hh, mm, ss, tzinfo=utc)
+        est = utc_dt.astimezone(eastern)
+        t = est.strftime(fmt)
+        # preprocessing time to US/Eastern timezone, only show date
+        # if the article is published before market closing, mark it current date
+        # if the article is published after market closing, mark it next day
+        # (next trading day to be considered)
+        if (t.endswith('EDT-0400') and (t[11:19] <= '16:00:00')) or (
+            t.endswith('EDT-0500') and (t[11:19] <= '17:00:00')):
+            t = t[:10]
+        else:
+            t = (est + timedelta(days=1)).strftime(fmt)[:10]
+        time_info.append(t) # only save the date
+        # read author information and save it into the author_info
+        author = ws['D'+str(i)].value.encode('utf-8')
+        author_info.append(author)
+    summary_info.reverse() #  time sequence
+    time_info.reverse()
+    author_info.reverse()
+    return summary_info, time_info, author_info
+
+def pre_padding(summary_info, batch_size = 16):
+    '''
+    to padding the seq_matrix in summary_info to same seq_len in each batch
+    :param summary_info: list of sequence matrix
+    :param batch_size: number of sequence in each batch
+    :return:
+        result: list of padded sequence matrix, sequence ranked as their true seq_len descending
+        seq_lens: list of seq_len corresponding to seq_matrix in result list
+        sort_list: list of np.array showing the original indexes of sequences
+    '''
+    n_data = len(summary_info)
+    n_batch = n_data - batch_size + 1
+    feature_dim = len(summary_info[0][0])
+    result = list() # (n_batch, batch_size, max_len, feature_dim)
+    seq_lens = list() # (n_batch, batch_size)
+    sort_list = list() # (n_batch, batch_size)
+    for i in range(n_batch):
+        # start = i*batch_size
+        # save the seq len of each batch into seq_len
+        '''
+        if len(seq_lens) == 0:
+            seq_len = list() # for each batch, the sequence len list
+            for j in range(i, i+batch_size):
+                seq_len.append(len(summary_info[j]))
+        else:
+            seq_len = seq_len[1:]   # remove the first element
+            seq_len.append(len(summary_info[i+batch_size-1]))   # add the last ele in the batch
+        '''
+        seq_len = []
+        for j in range(i, i+batch_size):
+            seq_len.append(len(summary_info[j]))
+        max_len = max(seq_len)
+        #
+        # save the padding summary into re  sult
+        tmp = list()
+        for j in range(i, i+batch_size):
+            cur_summary = list(summary_info[j])
+            cur_summary.extend([[0]*feature_dim]*(max_len - len(cur_summary)))
+            tmp.append(cur_summary)
+        # get index of sorted
+        seq_len = np.array(seq_len)
+        sort_idx = np.argsort(seq_len)[::-1]
+        #
+        tmp = np.array(tmp)
+        np.take(tmp, sort_idx, axis=0, out=tmp)
+        np.take(seq_len, sort_idx, axis=0, out=seq_len)
+        #
+        sort_list.append(sort_idx)
+        seq_len = list(seq_len)
+        seq_lens.append(seq_len)
+        result.append(list(tmp))
+    return result, seq_lens, sort_list
+
+def price_preprocessing(symbol, time_info, time_interval, directory = 'dataset/'):
+    # read stock price information from price_file
+    price_file = directory + symbol + '.csv'
+    dateparse = lambda dates: pd.datetime.strptime(dates, '%Y-%m-%d')
+    price_data = pd.read_csv(price_file, parse_dates=[0], index_col='Date', date_parser=dateparse, usecols=[0,4])
+    price_data = price_data['Close']
+    # get price after timedelta days from each of the time_info
+    fmt = '%Y-%m-%d'
+    targets_dict = {}
+    time_intervals = set([7, 14, 21] + [time_interval])
+    idx = price_data.index
+    for t in time_info:
+        for delta in time_intervals:
+            target_time = (datetime.strptime(t, fmt) + timedelta(days=delta)).strftime(fmt)
+            # if market is not open at t, then t-1
+            while t not in idx:
+                t = (datetime.strptime(t, fmt) - timedelta(days=1)).strftime(fmt)
+            # if market is not open at target_time, then target_time+1
+            while target_time not in idx:
+                target_time = (datetime.strptime(target_time, fmt) + timedelta(days=1)).strftime(fmt)
+
+            # set label
+            label = trend(price_data[target_time], price_data[t])
+
+            # save label into targets_dict
+            if str(delta) in targets_dict:
+                targets_dict[str(delta)].append(label)
+            else:
+                targets_dict[str(delta)] = list([label])
+    return targets_dict
+
+def nopadding_data_division(data, window_size):
+    '''
+    data division with no-padding data
+    :param data: tuple of (inputs, targets)
+    :param window_size:
+    :return: training and test dataset
+    '''
+    inputs, targets = data
+
+    x, y = [], []
+    for index in range(len(inputs) - window_size + 1):
+        x.append(inputs[index: index + window_size])
+        y.append(targets[index + window_size - 1])
+
+    # divide into training and test dataset
+    row = round(0.8 * len(x))
+    xtrain = x[:int(row)]
+    ytrain = y[:int(row)]
+
+    xtest = x[int(row):]
+    ytest = y[int(row):]
+
+    train_dataset = []
+    for xtr, ytr in zip(xtrain, ytrain):
+        train_dataset.append((xtr, [ytr]))
+
+    test_dataset = []
+    for xtr, ytr in zip(xtest, ytest):
+        test_dataset.append((xtr, [ytr]))  # label should be list
+
+    return train_dataset, test_dataset
+
+def padding_data_division(data, seq_lens, sort_list, window_size = 10):
+    '''
+    ddata division with padding data
+    :param data: tuple of (inputs, targets)
+    :param seq_lens: list of seq_len corresponding to seq_matrix in result list
+    :param sort_list: list of np.array showing the original indexes of sequences
+    :param window_size:
+    :return: training and test dataset: (n_batch, window_size, batch_size, max_len, feature_dim)
+    '''
+    # inputs: (n_block, batch_size, max_len-in-this-batch, feature_dim)
+    # targets : (n_data,)   # n_block = n_data - batch_size + 1
+    inputs, targets = data
+
+    n_batch, batch_size = len(inputs), len(inputs[0])
+
+    x, y = [], []
+    seqlen, sortlist = [], []
+    for index in range(0, n_batch - window_size + 1, batch_size):
+        x.append(inputs[index: index+window_size])
+        y.append(targets[index+window_size-1: index+window_size-1+batch_size])
+        seqlen.append(seq_lens[index: index+window_size])
+        sortlist.append(sort_list[index: index + window_size])
+
+    # divide into training and test dataset
+    # x: (n_batch, window_size, batch_size, padding_seq_len, feature_dim)
+    # y: (n_batch, batch_size)
+    row = round(0.8 * len(x))
+    xtrain = x[:int(row)]
+    ytrain = y[:int(row)]
+    sqlentrain = seqlen[:int(row)]
+    sttrain = sortlist[:int(row)]
+
+    xtest = x[int(row):]
+    ytest = y[int(row):]
+    sqlentest = seqlen[int(row):]
+    sttest = sortlist[int(row):]
+
+    train_dataset = []
+    for xtr, sqtr, sttr, ytr in zip(xtrain, sqlentrain, sttrain, ytrain):
+        train_dataset.append((xtr, sqtr, sttr, ytr))
+
+    test_dataset = []
+    for xtr, sqtr, sttr, ytr in zip(xtest, sqlentest, sttest, ytest):
+        test_dataset.append((xtr, sqtr, sttr, ytr))   # label should be list
+
+    return train_dataset, test_dataset
+
+def data_loader(symbol, model, directory, batch_size = 4, time_interval = 7, window_size = 10):
+    '''
+    :param symbol: symbol of the stock
+    :param model: fasttext model
+    :param directory: directory of file saving summary and price
+    :param time_interval: prediction time interval
+    :return: train_dataset, test_dataset consisting of tuples of (inputs, targets)
+    '''
+    summary_info, time_info, author_info = summary_preprocessing(symbol, model, directory)
+    # summary_batch: (n_block, batch_size, max_len-in-this-batch, feature_dim)
+    # seq_lens: (n_block, seq_len-list-in-this-batch)
+    # sort_list: (n_block, sort_list-in-this-batch)
+    summary_batch, seq_lens, sort_list = pre_padding(summary_info, batch_size)
+
+    targets_dict = price_preprocessing(symbol, time_info, time_interval, directory)
+
+    # divide data into training and test dataset and return
+    return padding_data_division((summary_batch, targets_dict[str(time_interval)]), seq_lens, sort_list, window_size)
