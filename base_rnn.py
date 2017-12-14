@@ -191,13 +191,14 @@ if __name__ == '__main__':
     else:
         print 'wrong data_directory!'
     #symbols = ['JPM']
+    pkl_path = 'pklsets' + '_bs%d_ws%d_ti%d/' % (batch_size, window_size, time_interval)
+    if not os.path.exists(pkl_path):
+        os.mkdir(pkl_path)
     global train_dataset, test_dataset
     train_dataset, test_dataset = [], []
     for symbol in symbols:
         print 'preparing data for ', symbol
-        pkl_path = 'pklsets' + '_bs%d_ws%d_ti%d/' % (batch_size, window_size, time_interval)
-        if not os.path.exists(pkl_path):
-            os.mkdir(pkl_path)
+
         trainfile = pkl_path + symbol + '_train.pkl'
         testfile = pkl_path + symbol + '_test.pkl'
         if os.path.exists(trainfile) and os.path.exists(testfile):
@@ -217,7 +218,10 @@ if __name__ == '__main__':
         train_dataset.extend(symbol_train)
         test_dataset.extend(symbol_test)
 
-    #train_dataset = train_dataset[:10]
+    with open(pkl_path + 'TrainDataset.pkl', 'w') as f:
+        cPickle.dump(train_dataset, f)
+    with open(pkl_path + 'TestDataset.pkl', 'w') as f:
+        cPickle.dump(test_dataset, f)
     print '#batch in training dataset is ', len(train_dataset)
     print '#batch in test dataset is ', len(test_dataset)
 
@@ -246,13 +250,17 @@ if __name__ == '__main__':
         test_acc.append(test(net))
         print 'Each epoch costs ', time.time() - epoch_start
 
+    lstm_model_path = pkl_path + 'lstm.model'
+    with open(lstm_model_path, 'w') as f:
+        cPickle.dump(net, f)
+
     l1, = plt.plot(range(max_epoch), train_acc, 'r', label='train')
     l2, = plt.plot(range(max_epoch), test_acc, 'b', label='test')
     plt.legend(handles=[l1, l2])
-    plt.title(symbol)
+    plt.title('Accuracy for all data')
     plt.xlabel('Epoch')
     plt.ylabel('Accuracy')
-    plt.savefig('all.png')
+    plt.savefig(pkl_path + 'All.png')
     print 'Finish...'
 
 
