@@ -46,7 +46,15 @@ def fasttext_model_pretraining():
     model = fasttext.skipgram(alltext, 'model')
     return model
 
-def pair(symbol, bin_size=5, show = False, directory='summary/'):
+def time_diff(symbol, bin_size=5, save = False, directory='summary/'):
+    '''
+    to compute the time differences of two consecusive articles for each company
+    :param symbol: stock symbol of specefic company
+    :param bin_size: bin size
+    :param save: whether save the picture
+    :param directory:
+    :return:
+    '''
     print 'loading data for ', symbol
     summary_file = directory + symbol + '.xlsx'
     wb = load_workbook(filename=summary_file)
@@ -67,12 +75,12 @@ def pair(symbol, bin_size=5, show = False, directory='summary/'):
     plt.title('Time Interval for ' + symbol)
     plt.xlabel('Days (bin size = %d)'%bin_size)
     plt.ylabel('Count')
-    if show:
-        plt.show()
-    else:
-        plt.savefig('time_diff/'+symbol + '_time_interval.png')
-        plt.show()
-
+    if save:
+        save_dir = 'time_diff/'
+        if not os.path.exists(save_dir):
+            os.mkdir(save_dir)
+        plt.savefig(save_dir+symbol + '_time_interval.png')
+    plt.show()
 
 def trend(target_price, basic_price, threshold = 0.01):
     '''
@@ -81,7 +89,7 @@ def trend(target_price, basic_price, threshold = 0.01):
     :param threshold: threshold of price changes
     :return: label of trend. 0: stay; 1: down; 2: up
     '''
-    percent = (target_price -  basic_price) / basic_price
+    percent = (float(target_price) -  float(basic_price)) / float(basic_price)
     if percent >= threshold:
         return 2
     elif percent <= -threshold:
@@ -93,7 +101,10 @@ def summary_preprocessing(symbol, model, directory = 'dataset/'):
     '''
     load summaries for the symbol
     :param symbol: stock symbol
-    :return: summary_info, time_info, author_info saving summary, time, author information respectively
+    :return:
+        summary_info: list saving summary, one matrix (seq_len, feature_dim) for each summary
+        time_info: list saving time (transfer to US/Eastern timezone,
+        author_info saving summary, time, author information respectively
     '''
     print 'Loading data for', symbol
     # read article information from summary_file
@@ -147,15 +158,31 @@ def summary_preprocessing(symbol, model, directory = 'dataset/'):
     author_info.reverse()
     return summary_info, time_info, author_info
 
+def matrix2vec(matrix_list):
+    '''
+    to average matrix to a vector,
+    :param matrix_list: list of matrix, each matrix has dimension: (seq_len, feature_dim)
+    :return: list of vector with dimension (feature_dim,)
+    '''
+    vec_list = []
+    for matrix in matrix_list:
+        matrix = np.array(matrix)
+        vec = np.average(matrix, axis=0)
+        vec_list.append(vec)
+    return vec_list
+
 def pre_padding(summary_info, batch_size = 16):
     '''
     to padding the seq_matrix in summary_info to same seq_len in each batch
     :param summary_info: list of sequence matrix
     :param batch_size: number of sequence in each batch
     :return:
-        result: list of padded sequence matrix, sequence ranked as their true seq_len descending
-        seq_lens: list of seq_len corresponding to seq_matrix in result list
-        sort_list: list of np.array showing the original indexes of sequences
+        result: (n_block, batch_size, max_len-in-this-batch, feature_dim)
+            list of padded sequence matrix, sequence ranked as their true seq_len descending
+        seq_lens: (n_block, seq_len-list-in-this-batch)
+            list of seq_len corresponding to seq_matrix in result list
+        sort_list: (n_block, sort_list-in-this-batch)
+            list of np.array showing the original indexes of sequences
     '''
     n_data = len(summary_info)
     n_batch = n_data - batch_size + 1
@@ -231,19 +258,28 @@ def price_preprocessing(symbol, time_info, time_interval, directory = 'dataset/'
                 targets_dict[str(delta)] = list([label])
     return targets_dict
 
-def nopadding_data_division(data, window_size):
+def data_division(data, batch_size, window_size):
     '''
     data division with no-padding data
     :param data: tuple of (inputs, targets)
+    :param batch_size:
     :param window_size:
-    :return: training and test dataset
+    :return: training and test dataset (#batch, 2, batch_size, window_size, feature_dim)
     '''
+    # inputs: (n_data, feature_dim)
+    # targets: (n_data,)
     inputs, targets = data
 
-    x, y = [], []
+    xsample, ysample = [], []
     for index in range(len(inputs) - window_size + 1):
-        x.append(inputs[index: index + window_size])
-        y.append(targets[index + window_size - 1])
+        xsample.append(inputs[index: index + window_size])  # (#sample, window_size, feature_dim)
+        ysample.append(targets[index + window_size - 1])    # (#sample, )
+
+    x, y = [],[]
+    n_batch = len(xsample) // batch_size
+    for b in range(n_batch):
+        x.append(xsample[b*batch_size: (b+1)*batch_size])    # (n_batch, batch_size, window_size, feature_dim)
+        y.append(ysample[b*batch_size: (b+1)*batch_size])   # (n_batch, batch_size, 1)
 
     # divide into training and test dataset
     row = round(0.8 * len(x))
@@ -255,11 +291,11 @@ def nopadding_data_division(data, window_size):
 
     train_dataset = []
     for xtr, ytr in zip(xtrain, ytrain):
-        train_dataset.append((xtr, [ytr]))
+        train_dataset.append((xtr, ytr))
 
     test_dataset = []
     for xtr, ytr in zip(xtest, ytest):
-        test_dataset.append((xtr, [ytr]))  # label should be list
+        test_dataset.append((xtr, ytr))  # label should be list
 
     return train_dataset, test_dataset
 
@@ -318,13 +354,14 @@ def data_loader(symbol, model, directory, batch_size = 4, time_interval = 7, win
     :param time_interval: prediction time interval
     :return: train_dataset, test_dataset consisting of tuples of (inputs, targets)
     '''
+    # get summary information for each symbol
     summary_info, time_info, author_info = summary_preprocessing(symbol, model, directory)
-    # summary_batch: (n_block, batch_size, max_len-in-this-batch, feature_dim)
-    # seq_lens: (n_block, seq_len-list-in-this-batch)
-    # sort_list: (n_block, sort_list-in-this-batch)
-    summary_batch, seq_lens, sort_list = pre_padding(summary_info, batch_size)
 
+    # tranfer summary matrix to summary vector
+    summary_vec = matrix2vec(summary_info)
+
+    # get label (up or down) for each symbol
     targets_dict = price_preprocessing(symbol, time_info, time_interval, directory)
 
     # divide data into training and test dataset and return
-    return padding_data_division((summary_batch, targets_dict[str(time_interval)]), seq_lens, sort_list, window_size)
+    return data_division((summary_vec, targets_dict[str(time_interval)]), batch_size, window_size)
