@@ -15,6 +15,8 @@ import matplotlib.pyplot as plt
 from torch.autograd import Variable
 #from utils import progress_bar
 from data_loader import data_loader, fasttext_model_pretraining
+from model import LSTMModel, CNN_LSTMModel
+from plot import plot
 
 
 def train(net, use_cuda=False):
@@ -125,60 +127,28 @@ def test_padding(net, use_cuda=False):
 
 
 
-class LSTMModel(nn.Module):
-    def __init__(self, input_size, hidden_size, output_size, batch_size):
-        super(LSTMModel, self).__init__()
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.batch_size = batch_size
-
-        #self.hidden = self.init_hidden()
-        self.lstm = nn.LSTM(input_size, hidden_size, batch_first=True)
-        self.linear = nn.Linear(hidden_size, output_size)
-        self.softmax = nn.LogSoftmax()
-
-    def forward(self, inputs):
-        # sequence: (window_size, batch_size, max_len, feature_dim)
-        self.hidden = self.init_hidden()
-        _, self.hidden = self.lstm(inputs, self.hidden)
-        output = self.softmax(self.linear(self.hidden[0][0]))
-        return output
-
-    def init_hidden(self):
-        result = (Variable(torch.zeros(1, self.batch_size, self.hidden_size)),
-                Variable(torch.zeros(1, self.batch_size, self.hidden_size)))
-        if use_cuda:
-            return result.cuda()
-        return result
-
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='PyTorch  Training')
-    parser.add_argument('--input_size', default=100, type=int, help='input size')
-    parser.add_argument('--hidden_size', default=200, type=int, help='hidden size')
+    parser.add_argument('--feature_dim', default=100, type=int, help='feature dimension')
+    parser.add_argument('--input_size', default=100, type=int, help='input size of lstm model')
+    parser.add_argument('--hidden_size', default=200, type=int, help='hidden size of lstm model')
     parser.add_argument('--max_epoch', default=100, type=int, help='max_epoch')
     parser.add_argument('--batch_size', default=16, type=int, help='batch size')
     parser.add_argument('--window_size', default=10, type=int, help='window size')
+    parser.add_argument('--kernel_num', default=32, type=int, help='number of each kernel')
+    parser.add_argument('--kernel_sizes', default='3,4,5', type=str, help='kernel sizes')
     parser.add_argument('--time_interval', default=7, type=int, help='prediction time interval')
     parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
-    parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
-                        help='momentum')
+    parser.add_argument('--momentum', default=0.9, type=float, metavar='M', help='momentum')
+    parser.add_argument('--dropout', type=float, default=0.5, help='the probability for dropout (0 = no dropout) [default: 0.5]')
     parser.add_argument('--data_directory', default='dataset/', type=str, help='data directory')
+    parser.add_argument('--cuda_able', action='store_true', help='enables cuda')
     args = parser.parse_args()
 
-    use_cuda = torch.cuda.is_available()
-
+    args.kernel_sizes = [int(k) for k in args.kernel_sizes.split(',')]
+    use_cuda = torch.cuda.is_available() and args.cuda_able
     #use_cuda = False
-    '''
-    input_size = 100
-    hidden_size = 200
-    output_size = 3
-    batch_size = 16
-    window_size = 10
-    time_interval = 7
-    max_epoch = 100
-    '''
-    data_directory = 'dataset/'
+    print 'use_cuda = ', use_cuda
 
     # get fastText model
     if not os.path.exists('model.bin'):
@@ -188,63 +158,13 @@ if __name__ == '__main__':
 
     # Load data
     global train_dataset, test_dataset
-    pkl_path = 'pklsets' + '_bs%d_ws%d_ti%d/' % (args.batch_size, args.window_size, args.time_interval)
-    TrainDatasetFile = pkl_path + 'TrainDataset.pkl'
-    TestDatasetFile = pkl_path + 'TestDataset.pkl'
-    if os.path.exists(TrainDatasetFile) and os.path.exists(TestDatasetFile):
-        print 'loading train and test dataset from pkl files.'
-        with open(TrainDatasetFile, 'r') as f:
-            train_dataset = cPickle.load(f)
-        with open(TestDatasetFile, 'r') as f:
-            test_dataset = cPickle.load(f)
-    else:
-        print 'collect and prepare the train and test dataset'
-        if os.path.exists(data_directory) and os.path.isdir(data_directory):
-            symbols = [f[:-5] for f in os.listdir(data_directory) if f.endswith('.xlsx')]
-        else:
-            print 'wrong data_directory!'
-        #symbols = ['JPM']
-        if not os.path.exists(pkl_path):
-            os.mkdir(pkl_path)
-        train_dataset, test_dataset = [], []
-        for symbol in symbols:
-            print 'preparing data for ', symbol
-
-            trainfile = pkl_path + symbol + '_train.pkl'
-            testfile = pkl_path + symbol + '_test.pkl'
-            if os.path.exists(trainfile) and os.path.exists(testfile):
-                print 'read datasets from pkl files.'
-                with open(trainfile, 'r') as f:
-                    symbol_train = cPickle.load(f)
-                with open(testfile, 'r') as f:
-                    symbol_test = cPickle.load(f)
-            else:
-                symbol_train, symbol_test = data_loader(symbol, model, directory=args.data_directory, batch_size=args.batch_size,
-                                                        time_interval=args.time_interval, window_size=args.window_size)
-                print 'saving dataset into pkl files.'
-                with open(trainfile, 'w') as f:
-                    cPickle.dump(train_dataset, f)
-                with open(testfile, 'w') as f:
-                    cPickle.dump(test_dataset, f)
-            train_dataset.extend(symbol_train)
-            test_dataset.extend(symbol_test)
-        print 'save train and test datasets into pkl files.'
-        with open(TrainDatasetFile, 'w') as f:
-            cPickle.dump(train_dataset, f)
-        with open(TestDatasetFile, 'w') as f:
-            cPickle.dump(test_dataset, f)
-
+    train_dataset, test_dataset, dataset_path = data_loader(model, args)
     print '#batch in training dataset is ', len(train_dataset)
     print '#batch in test dataset is ', len(test_dataset)
 
-    # Check the save_dir exists or not
-    # if not os.path.exists(args.save_dir):
-    #    os.makedirs(args.save_dir)
-
     # build model
     print 'Building model...'
-    output_size = 3
-    net = LSTMModel(args.input_size, args.hidden_size,  output_size, args.batch_size)
+    net = CNN_LSTMModel(args)
 
     if use_cuda:
         net.cuda()
@@ -252,8 +172,8 @@ if __name__ == '__main__':
         cudnn.benchmark = True
 
     criterion = nn.CrossEntropyLoss()
-    #optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=5e-4)
-    optimizer = optim.SGD(net.parameters(), lr=0.1, momentum=0.9, weight_decay=5e-4)
+    optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=5e-4)
+    #optimizer = optim.SGD(net.parameters(), lr=0.1, momentum=0.9, weight_decay=5e-4)
 
     train_acc, test_acc = [], []
     for epoch in range(0, args.max_epoch):
@@ -263,32 +183,38 @@ if __name__ == '__main__':
         test_acc.append(test(net, use_cuda))
         print 'Each epoch costs ', time.time() - epoch_start
 
-    lstm_model_path = pkl_path + 'lstm.model'
+    # save the model
+    lstm_model_path = dataset_path + 'lstm.model'
     with open(lstm_model_path, 'w') as f:
         cPickle.dump(net, f)
 
-    l1, = plt.plot(range(args.max_epoch), train_acc, 'r', label='train')
-    l2, = plt.plot(range(args.max_epoch), test_acc, 'b', label='test')
-    plt.legend(handles=[l1, l2])
-    plt.title('Accuracy for all data')
-    plt.xlabel('Epoch')
-    plt.ylabel('Accuracy')
-    plt.savefig(pkl_path + 'All.png')
+    # plot the accuracy and save it into dataset_path
+    plot(train_acc, test_acc, dataset_path)
+
     print 'Finish...'
 
+    '''
+
+    args.feature_dim = 5
+    args.input_size = 10
+    args.hidden_size = 20
+    args.kernel_num = 7
+    args.batch_size = 3
+
+    seq_len = 11
 
 
 
+    net = CNN_LSTMModel(args)
+
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=5e-4)
+
+    x = Variable(torch.rand(args.batch_size, seq_len, args.feature_dim))
+    out = net(x)
 
 
-
-
-
-
-
-
-
-
+'''
 
 
 

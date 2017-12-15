@@ -4,6 +4,7 @@ import pytz
 import fasttext
 import pandas as pd
 import numpy as np
+import cPickle
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 from openpyxl.reader.excel import load_workbook
@@ -227,6 +228,16 @@ def pre_padding(summary_info, batch_size = 16):
         result.append(list(tmp))
     return result, seq_lens, sort_list
 
+def fix_len_padding(summary_info):
+    max_len = 100
+    feature_dim = len(summary_info[0][0])
+    for i, s in enumerate(summary_info):
+        if len(s) > max_len:
+            summary_info[i] = s[:max_len]
+        else:
+            summary_info[i].extend([[0]*feature_dim]*(max_len - len(s)))
+    return summary_info
+
 def price_preprocessing(symbol, time_info, time_interval, directory = 'dataset/'):
     # read stock price information from price_file
     price_file = directory + symbol + '.csv'
@@ -258,7 +269,43 @@ def price_preprocessing(symbol, time_info, time_interval, directory = 'dataset/'
                 targets_dict[str(delta)] = list([label])
     return targets_dict
 
-def data_division(data, batch_size, window_size):
+def shuffle_samples(train_samples, train_labels, test_samples, test_labels):
+    '''
+    type(inputs) == 'list', shuffle then return list
+    :param train_samples:
+    :param train_labels:
+    :param test_samples:
+    :param test_labels:
+    :return:
+    '''
+    # transfer to numpy.array
+    train_samples = np.array(train_samples, dtype=np.float32)
+    train_labels = np.array(train_labels, dtype=np.int32)
+    test_samples = np.array(test_samples, dtype=np.float32)
+    test_labels = np.array(test_labels, dtype=np.int32)
+
+    train_num = train_samples.shape[0]
+    test_num = test_samples.shape[0]
+
+    # shuffling data
+    train_idx = np.arange(train_num, dtype=np.int32)
+    np.random.shuffle(train_idx)
+    np.take(train_samples, train_idx, axis=0, out=train_samples)
+    np.take(train_labels, train_idx, axis=0, out=train_labels)
+    train_samples = train_samples.tolist()
+    train_labels = train_labels.tolist()
+
+    test_idx = np.arange(test_num, dtype=np.int32)
+    np.random.shuffle(test_idx)
+    np.take(test_samples, test_idx, axis=0, out=test_samples)
+    np.take(test_labels, test_idx, axis=0, out=test_labels)
+    test_samples = test_samples.tolist()
+    test_labels = test_labels.tolist()
+
+    return train_samples, train_labels, test_samples, test_labels
+
+
+def data_division(data, batch_size, window_size, shuffle=False):
     '''
     data division with no-padding data
     :param data: tuple of (inputs, targets)
@@ -288,29 +335,8 @@ def data_division(data, batch_size, window_size):
     test_samples = xsample[int(row)*batch_size:]
     test_labels = ysample[int(row)*batch_size:]
 
-    # transfer to numpy.array
-    train_samples = np.array(train_samples, dtype=np.float32)
-    train_labels = np.array(train_labels, dtype=np.int32)
-    test_samples = np.array(test_samples, dtype=np.float32)
-    test_labels = np.array(test_labels, dtype=np.int32)
-
-    train_num = train_samples.shape[0]
-    test_num = test_samples.shape[0]
-
-    # shuffling data
-    train_idx = np.arange(train_num, dtype=np.int32)
-    np.random.shuffle(train_idx)
-    np.take(train_samples, train_idx, axis=0, out=train_samples)
-    np.take(train_labels, train_idx, axis=0, out=train_labels)
-    train_samples = train_samples.tolist()
-    train_labels = train_labels.tolist()
-
-    test_idx = np.arange(test_num, dtype=np.int32)
-    np.random.shuffle(test_idx)
-    np.take(test_samples, test_idx, axis=0, out=test_samples)
-    np.take(test_labels, test_idx, axis=0, out=test_labels)
-    test_samples = test_samples.tolist()
-    test_labels = test_labels.tolist()
+    if shuffle:
+        train_samples, train_labels, test_samples, test_labels = shuffle_samples(train_samples, train_labels, test_samples, test_labels)
 
     train_dataset = []
     for b in range(int(row)):
@@ -326,9 +352,10 @@ def data_division(data, batch_size, window_size):
 
     return train_dataset, test_dataset
 
+"""
 def padding_data_division(data, seq_lens, sort_list, window_size = 10):
     '''
-    ddata division with padding data
+    data division with padding data
     :param data: tuple of (inputs, targets)
     :param seq_lens: list of seq_len corresponding to seq_matrix in result list
     :param sort_list: list of np.array showing the original indexes of sequences
@@ -372,8 +399,9 @@ def padding_data_division(data, seq_lens, sort_list, window_size = 10):
         test_dataset.append((xtr, sqtr, sttr, ytr))   # label should be list
 
     return train_dataset, test_dataset
+"""
 
-def data_loader(symbol, model, directory, batch_size = 4, time_interval = 7, window_size = 10):
+def data_loader_for_each_symbol_ave_seq(symbol, model, directory, batch_size = 4, time_interval = 7, window_size = 10):
     '''
     :param symbol: symbol of the stock
     :param model: fasttext model
@@ -391,4 +419,82 @@ def data_loader(symbol, model, directory, batch_size = 4, time_interval = 7, win
     targets_dict = price_preprocessing(symbol, time_info, time_interval, directory)
 
     # divide data into training and test dataset and return
-    return data_division((summary_vec, targets_dict[str(time_interval)]), batch_size, window_size)
+    return data_division((summary_vec, targets_dict[str(time_interval)]), batch_size, window_size, True)
+
+def data_loader_for_each_symbol_cnn(symbol, model, directory, batch_size = 1, time_interval = 7, window_size = 10):
+    '''
+    :param symbol: symbol of the stock
+    :param model: fasttext model
+    :param directory: directory of file saving summary and price
+    :param time_interval: prediction time interval
+    :return: train_dataset, test_dataset consisting of tuples of (inputs, targets)
+    '''
+    # get summary information for each symbol
+    summary_info, time_info, author_info = summary_preprocessing(symbol, model, directory)
+
+    # padding summary with fix len
+    summary_info = fix_len_padding(summary_info)
+
+    # get label (up or down) for each symbol
+    targets_dict = price_preprocessing(symbol, time_info, time_interval, directory)
+
+    # divide data into training and test dataset and return
+    return data_division((summary_info, targets_dict[str(time_interval)]), batch_size, window_size, True)
+
+
+
+def data_loader(model, args):
+    '''
+    return train_dataset, test_dataset, and the path they saved
+    :param model: fasttext word2vec model
+    :param args:
+    :return:
+    '''
+    pkl_path = 'pklsets' + '_bs%d_ws%d_ti%d/' % (args.batch_size, args.window_size, args.time_interval)
+    TrainDatasetFile = pkl_path + 'TrainDataset.pkl'
+    TestDatasetFile = pkl_path + 'TestDataset.pkl'
+    # if train_dataset and test_dataset exists, load from files
+    if os.path.exists(TrainDatasetFile) and os.path.exists(TestDatasetFile):
+        print 'loading train and test dataset from pkl files.'
+        with open(TrainDatasetFile, 'r') as f:
+            train_dataset = cPickle.load(f)
+        with open(TestDatasetFile, 'r') as f:
+            test_dataset = cPickle.load(f)
+    else:
+        print 'collect and prepare the train and test dataset'
+        if os.path.exists(args.data_directory) and os.path.isdir(args.data_directory):
+            symbols = [f[:-5] for f in os.listdir(args.data_directory) if f.endswith('.xlsx')]
+        else:
+            print 'wrong data_directory!'
+        if not os.path.exists(pkl_path):
+            os.mkdir(pkl_path)
+        train_dataset, test_dataset = [], []
+        for symbol in symbols:
+            print 'preparing data for ', symbol
+
+            trainfile = pkl_path + symbol + '_train.pkl'
+            testfile = pkl_path + symbol + '_test.pkl'
+            if os.path.exists(trainfile) and os.path.exists(testfile):
+                print 'read datasets from pkl files.'
+                with open(trainfile, 'r') as f:
+                    symbol_train = cPickle.load(f)
+                with open(testfile, 'r') as f:
+                    symbol_test = cPickle.load(f)
+            else:
+                symbol_train, symbol_test = data_loader_for_each_symbol_cnn(symbol, model, directory=args.data_directory,
+                                                        batch_size=args.batch_size,
+                                                        time_interval=args.time_interval, window_size=args.window_size)
+                print 'saving dataset into pkl files.'
+                with open(trainfile, 'w') as f:
+                    cPickle.dump(train_dataset, f)
+                with open(testfile, 'w') as f:
+                    cPickle.dump(test_dataset, f)
+            train_dataset.extend(symbol_train)
+            test_dataset.extend(symbol_test)
+        print 'save train and test datasets into pkl files.'
+        with open(TrainDatasetFile, 'w') as f:
+            cPickle.dump(train_dataset, f)
+        with open(TestDatasetFile, 'w') as f:
+            cPickle.dump(test_dataset, f)
+
+    return train_dataset, test_dataset, pkl_path
