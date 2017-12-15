@@ -2,6 +2,7 @@ import os
 import cPickle
 import time
 import fasttext
+import argparse
 import numpy as np
 
 import torch
@@ -152,11 +153,10 @@ class LSTMModel(nn.Module):
 
 
 if __name__ == '__main__':
-    '''
-    parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
+    parser = argparse.ArgumentParser(description='PyTorch  Training')
     parser.add_argument('--input_size', default=100, type=int, help='input size')
     parser.add_argument('--hidden_size', default=200, type=int, help='hidden size')
-    parser.add_argument('--max_epoch', default=0, type=int, help='max_epoch')
+    parser.add_argument('--max_epoch', default=100, type=int, help='max_epoch')
     parser.add_argument('--batch_size', default=16, type=int, help='batch size')
     parser.add_argument('--window_size', default=10, type=int, help='window size')
     parser.add_argument('--time_interval', default=7, type=int, help='prediction time interval')
@@ -167,9 +167,9 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     use_cuda = torch.cuda.is_available()
-    '''
 
-    use_cuda = False
+    #use_cuda = False
+    '''
     input_size = 100
     hidden_size = 200
     output_size = 3
@@ -177,6 +177,7 @@ if __name__ == '__main__':
     window_size = 10
     time_interval = 7
     max_epoch = 100
+    '''
     data_directory = 'dataset/'
 
     # get fastText model
@@ -186,42 +187,53 @@ if __name__ == '__main__':
         model = fasttext.load_model('model.bin')
 
     # Load data
-    if os.path.exists(data_directory) and os.path.isdir(data_directory):
-        symbols = [f[:-5] for f in os.listdir(data_directory) if f.endswith('.xlsx')]
-    else:
-        print 'wrong data_directory!'
-    #symbols = ['JPM']
-    pkl_path = 'pklsets' + '_bs%d_ws%d_ti%d/' % (batch_size, window_size, time_interval)
-    if not os.path.exists(pkl_path):
-        os.mkdir(pkl_path)
     global train_dataset, test_dataset
-    train_dataset, test_dataset = [], []
-    for symbol in symbols:
-        print 'preparing data for ', symbol
-
-        trainfile = pkl_path + symbol + '_train.pkl'
-        testfile = pkl_path + symbol + '_test.pkl'
-        if os.path.exists(trainfile) and os.path.exists(testfile):
-            print 'read datasets from pkl files.'
-            with open(trainfile, 'r') as f:
-                symbol_train = cPickle.load(f)
-            with open(testfile, 'r') as f:
-                symbol_test = cPickle.load(f)
+    pkl_path = 'pklsets' + '_bs%d_ws%d_ti%d/' % (args.batch_size, args.window_size, args.time_interval)
+    TrainDatasetFile = pkl_path + 'TrainDataset.pkl'
+    TestDatasetFile = pkl_path + 'TestDataset.pkl'
+    if os.path.exists(TrainDatasetFile) and os.path.exists(TestDatasetFile):
+        print 'loading train and test dataset from pkl files.'
+        with open(TrainDatasetFile, 'r') as f:
+            train_dataset = cPickle.load(f)
+        with open(TestDatasetFile, 'r') as f:
+            test_dataset = cPickle.load(f)
+    else:
+        print 'collect and prepare the train and test dataset'
+        if os.path.exists(data_directory) and os.path.isdir(data_directory):
+            symbols = [f[:-5] for f in os.listdir(data_directory) if f.endswith('.xlsx')]
         else:
-            symbol_train, symbol_test = data_loader(symbol, model, directory=data_directory, batch_size=batch_size,
-                                                    time_interval=time_interval, window_size=window_size)
-            print 'saving dataset into pkl files.'
-            with open(trainfile, 'w') as f:
-                cPickle.dump(train_dataset, f)
-            with open(testfile, 'w') as f:
-                cPickle.dump(test_dataset, f)
-        train_dataset.extend(symbol_train)
-        test_dataset.extend(symbol_test)
+            print 'wrong data_directory!'
+        #symbols = ['JPM']
+        if not os.path.exists(pkl_path):
+            os.mkdir(pkl_path)
+        train_dataset, test_dataset = [], []
+        for symbol in symbols:
+            print 'preparing data for ', symbol
 
-    with open(pkl_path + 'TrainDataset.pkl', 'w') as f:
-        cPickle.dump(train_dataset, f)
-    with open(pkl_path + 'TestDataset.pkl', 'w') as f:
-        cPickle.dump(test_dataset, f)
+            trainfile = pkl_path + symbol + '_train.pkl'
+            testfile = pkl_path + symbol + '_test.pkl'
+            if os.path.exists(trainfile) and os.path.exists(testfile):
+                print 'read datasets from pkl files.'
+                with open(trainfile, 'r') as f:
+                    symbol_train = cPickle.load(f)
+                with open(testfile, 'r') as f:
+                    symbol_test = cPickle.load(f)
+            else:
+                symbol_train, symbol_test = data_loader(symbol, model, directory=args.data_directory, batch_size=args.batch_size,
+                                                        time_interval=args.time_interval, window_size=args.window_size)
+                print 'saving dataset into pkl files.'
+                with open(trainfile, 'w') as f:
+                    cPickle.dump(train_dataset, f)
+                with open(testfile, 'w') as f:
+                    cPickle.dump(test_dataset, f)
+            train_dataset.extend(symbol_train)
+            test_dataset.extend(symbol_test)
+        print 'save train and test datasets into pkl files.'
+        with open(TrainDatasetFile, 'w') as f:
+            cPickle.dump(train_dataset, f)
+        with open(TestDatasetFile, 'w') as f:
+            cPickle.dump(test_dataset, f)
+
     print '#batch in training dataset is ', len(train_dataset)
     print '#batch in test dataset is ', len(test_dataset)
 
@@ -231,7 +243,8 @@ if __name__ == '__main__':
 
     # build model
     print 'Building model...'
-    net = LSTMModel(input_size, hidden_size, output_size, batch_size)
+    output_size = 3
+    net = LSTMModel(args.input_size, args.hidden_size,  output_size, args.batch_size)
 
     if use_cuda:
         net.cuda()
@@ -243,19 +256,19 @@ if __name__ == '__main__':
     optimizer = optim.SGD(net.parameters(), lr=0.1, momentum=0.9, weight_decay=5e-4)
 
     train_acc, test_acc = [], []
-    for epoch in range(0, max_epoch):
+    for epoch in range(0, args.max_epoch):
         print 'Epoch %d' % epoch
         epoch_start = time.time()
-        train_acc.append(train(net))
-        test_acc.append(test(net))
+        train_acc.append(train(net, use_cuda))
+        test_acc.append(test(net, use_cuda))
         print 'Each epoch costs ', time.time() - epoch_start
 
     lstm_model_path = pkl_path + 'lstm.model'
     with open(lstm_model_path, 'w') as f:
         cPickle.dump(net, f)
 
-    l1, = plt.plot(range(max_epoch), train_acc, 'r', label='train')
-    l2, = plt.plot(range(max_epoch), test_acc, 'b', label='test')
+    l1, = plt.plot(range(args.max_epoch), train_acc, 'r', label='train')
+    l2, = plt.plot(range(args.max_epoch), test_acc, 'b', label='test')
     plt.legend(handles=[l1, l2])
     plt.title('Accuracy for all data')
     plt.xlabel('Epoch')
