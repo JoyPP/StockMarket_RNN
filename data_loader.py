@@ -5,6 +5,7 @@ import fasttext
 import pandas as pd
 import numpy as np
 import cPickle
+import time
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 from openpyxl.reader.excel import load_workbook
@@ -286,8 +287,10 @@ def shuffle_samples(train_samples, train_labels, test_samples, test_labels):
 
     train_num = train_samples.shape[0]
     test_num = test_samples.shape[0]
+    print train_samples.shape, test_samples.shape
 
     # shuffling data
+    print 'train data shuffling'
     train_idx = np.arange(train_num, dtype=np.int32)
     np.random.shuffle(train_idx)
     np.take(train_samples, train_idx, axis=0, out=train_samples)
@@ -295,6 +298,7 @@ def shuffle_samples(train_samples, train_labels, test_samples, test_labels):
     train_samples = train_samples.tolist()
     train_labels = train_labels.tolist()
 
+    print 'test data shuffling'
     test_idx = np.arange(test_num, dtype=np.int32)
     np.random.shuffle(test_idx)
     np.take(test_samples, test_idx, axis=0, out=test_samples)
@@ -340,8 +344,8 @@ def data_division(data, batch_size, window_size, shuffle=False):
 
     train_dataset = []
     for b in range(int(row)):
-        x = train_samples[b*batch_size: (b+1)*batch_size]    # (train_batch, batch_size, window_size, feature_dim)
-        y = train_labels[b*batch_size: (b+1)*batch_size]   # (train_batch, batch_size, 1)
+        x = train_samples[b*batch_size: (b+1)*batch_size]    # (#train_batch, batch_size, window_size, feature_dim)
+        y = train_labels[b*batch_size: (b+1)*batch_size]   # (#train_batch, batch_size, 1)
         train_dataset.append((x, y))
 
     test_dataset = []
@@ -434,12 +438,12 @@ def data_loader_for_each_symbol_cnn(symbol, model, directory, batch_size = 1, ti
 
     # padding summary with fix len
     summary_info = fix_len_padding(summary_info)
-
+    print '#data = ', len(summary_info)
     # get label (up or down) for each symbol
     targets_dict = price_preprocessing(symbol, time_info, time_interval, directory)
 
     # divide data into training and test dataset and return
-    return data_division((summary_info, targets_dict[str(time_interval)]), batch_size, window_size, True)
+    return data_division((summary_info, targets_dict[str(time_interval)]), batch_size, window_size)
 
 
 
@@ -450,16 +454,18 @@ def data_loader(model, args):
     :param args:
     :return:
     '''
-    pkl_path = 'pklsets' + '_bs%d_ws%d_ti%d/' % (args.batch_size, args.window_size, args.time_interval)
+    pkl_path = 'pklsets_cnn' + '_bs%d_ws%d_ti%d/' % (args.batch_size, args.window_size, args.time_interval)
     TrainDatasetFile = pkl_path + 'TrainDataset.pkl'
     TestDatasetFile = pkl_path + 'TestDataset.pkl'
     # if train_dataset and test_dataset exists, load from files
     if os.path.exists(TrainDatasetFile) and os.path.exists(TestDatasetFile):
         print 'loading train and test dataset from pkl files.'
+        start = time.time()
         with open(TrainDatasetFile, 'r') as f:
             train_dataset = cPickle.load(f)
         with open(TestDatasetFile, 'r') as f:
             test_dataset = cPickle.load(f)
+        print 'loading time = ', time.time() - start
     else:
         print 'collect and prepare the train and test dataset'
         if os.path.exists(args.data_directory) and os.path.isdir(args.data_directory):
@@ -471,24 +477,8 @@ def data_loader(model, args):
         train_dataset, test_dataset = [], []
         for symbol in symbols:
             print 'preparing data for ', symbol
-
-            trainfile = pkl_path + symbol + '_train.pkl'
-            testfile = pkl_path + symbol + '_test.pkl'
-            if os.path.exists(trainfile) and os.path.exists(testfile):
-                print 'read datasets from pkl files.'
-                with open(trainfile, 'r') as f:
-                    symbol_train = cPickle.load(f)
-                with open(testfile, 'r') as f:
-                    symbol_test = cPickle.load(f)
-            else:
-                symbol_train, symbol_test = data_loader_for_each_symbol_cnn(symbol, model, directory=args.data_directory,
-                                                        batch_size=args.batch_size,
-                                                        time_interval=args.time_interval, window_size=args.window_size)
-                print 'saving dataset into pkl files.'
-                with open(trainfile, 'w') as f:
-                    cPickle.dump(train_dataset, f)
-                with open(testfile, 'w') as f:
-                    cPickle.dump(test_dataset, f)
+            symbol_train, symbol_test = data_loader_for_each_symbol_cnn(symbol, model, directory=args.data_directory,
+                                                batch_size=args.batch_size, time_interval=args.time_interval, window_size=args.window_size)
             train_dataset.extend(symbol_train)
             test_dataset.extend(symbol_test)
         print 'save train and test datasets into pkl files.'

@@ -3,128 +3,14 @@ import cPickle
 import time
 import fasttext
 import argparse
-import numpy as np
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
 import torch.backends.cudnn as cudnn
-import matplotlib.pyplot as plt
 
-from torch.autograd import Variable
-#from utils import progress_bar
 from data_loader import data_loader, fasttext_model_pretraining
 from model import LSTMModel, CNN_LSTMModel
 from plot import plot
-
-
-def train(net, use_cuda=False):
-    net.train()
-    train_loss = 0
-    total = 0
-    correct = 0
-    for batch_idx, (inputs, targets) in enumerate(train_dataset):
-        if use_cuda:
-            inputs, targets = inputs.cuda(), targets.cuda()
-        optimizer.zero_grad()
-        inputs, targets = Variable(torch.Tensor(inputs)), Variable(torch.LongTensor(targets))
-        outputs = net(inputs)
-        loss = criterion(outputs, targets)
-        #print 'loss = ',loss
-        #start_time =  time.time()
-        loss.backward()
-        #print 'spent time backward = ', time.time() - start_time
-        optimizer.step()
-
-        train_loss += loss.data[0]
-        _, predicted = torch.max(outputs.data, 1)
-
-        total += targets.size(0)
-        correct += predicted.eq(targets.data).cpu().sum()
-
-    print 'batch_idx = %d, loss: %.3f | Acc: %.3f%% (%d/%d)' % (batch_idx, train_loss/(batch_idx+1), 100.0*correct/total, correct, total)
-    return 1.0 * correct / total
-        #progress_bar(batch_idx, len(train_dataset), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
-        #             % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
-
-def test(net, use_cuda=False):
-    net.eval()
-    test_loss = 0
-    correct = 0
-    total = 0
-    for batch_idx, (inputs, targets) in enumerate(test_dataset):
-        if use_cuda:
-            inputs, targets = inputs.cuda(), targets.cuda()
-        optimizer.zero_grad()
-        inputs, targets = Variable(torch.Tensor(inputs)), Variable(torch.LongTensor(targets))
-        outputs = net(inputs)
-        loss = criterion(outputs, targets)
-
-        test_loss += loss.data[0]
-        _, predicted = torch.max(outputs.data, 1)
-        total += targets.size(0)
-        correct += predicted.eq(targets.data).cpu().sum()
-
-    print 'batch_idx = %d, loss: %.3f | Acc: %.3f%% (%d/%d)' % (batch_idx, test_loss/(batch_idx+1), 100.0*correct/total, correct, total)
-    return 1.0*correct/total
-        #progress_bar(batch_idx, len(test_dataset), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
-        #             % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
-
-
-def train_padding(net, use_cuda=False):
-    net.train()
-    train_loss = 0
-    total = 0
-    correct = 0
-    # inputs: (window_size, batch_size, max_len, feature_dim)
-    for batch_idx, (inputs, seq_lens, sort_list, targets) in enumerate(train_dataset):
-        if use_cuda:
-            inputs, targets = inputs.cuda(), targets.cuda()
-        optimizer.zero_grad()
-        targets = Variable(torch.LongTensor(targets))
-        outputs = net(inputs, seq_lens, sort_list)
-        loss = criterion(outputs, targets)
-        #print 'loss = ',loss
-        #start_time = time.time()
-        loss.backward()
-        #print 'spent time backward = ', time.time() - start_time
-        optimizer.step()
-
-        train_loss += loss.data[0]
-        _, predicted = torch.max(outputs.data, 1)
-
-        total += targets.size(0)
-        correct += predicted.eq(targets.data).cpu().sum()
-
-    print 'batch_idx = %d, loss: %.3f | Acc: %.3f%% (%d/%d)' % (batch_idx, train_loss/(batch_idx+1), 100.0*correct/total, correct, total)
-    return 1.0 * correct / total
-        #progress_bar(batch_idx, len(train_dataset), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
-        #             % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
-
-def test_padding(net, use_cuda=False):
-    net.eval()
-    test_loss = 0
-    correct = 0
-    total = 0
-    for batch_idx, (inputs, seq_lens, sort_list, targets) in enumerate(test_dataset):
-        if use_cuda:
-            inputs, targets = inputs.cuda(), targets.cuda()
-        optimizer.zero_grad()
-        targets = Variable(torch.LongTensor(targets))
-        outputs = net(inputs, seq_lens, sort_list)
-        loss = criterion(outputs, targets)
-
-        test_loss += loss.data[0]
-        _, predicted = torch.max(outputs.data, 1)
-        total += targets.size(0)
-        correct += predicted.eq(targets.data).cpu().sum()
-
-    print 'batch_idx = %d, loss: %.3f | Acc: %.3f%% (%d/%d)' % (batch_idx, test_loss/(batch_idx+1), 100.0*correct/total, correct, total)
-    return 1.0*correct/total
-        #progress_bar(batch_idx, len(test_dataset), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
-        #             % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
-
+from train import train, test
 
 
 if __name__ == '__main__':
@@ -156,7 +42,9 @@ if __name__ == '__main__':
     else:
         model = fasttext.load_model('model.bin')
 
-    # Load data
+    # get symbols
+    if os.path.exists(args.data_directory) and os.path.isdir(args.data_directory):
+        symbols = [f[:-5] for f in os.listdir(args.data_directory) if f.endswith('.xlsx')]
     global train_dataset, test_dataset
     train_dataset, test_dataset, dataset_path = data_loader(model, args)
     print '#batch in training dataset is ', len(train_dataset)
@@ -171,16 +59,14 @@ if __name__ == '__main__':
         net = torch.nn.DataParallel(net, device_ids=range(torch.cuda.device_count()))
         cudnn.benchmark = True
 
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=5e-4)
-    #optimizer = optim.SGD(net.parameters(), lr=0.1, momentum=0.9, weight_decay=5e-4)
 
     train_acc, test_acc = [], []
     for epoch in range(0, args.max_epoch):
         print 'Epoch %d' % epoch
         epoch_start = time.time()
-        train_acc.append(train(net, use_cuda))
-        test_acc.append(test(net, use_cuda))
+        train_dataset, test_dataset
+        train_acc.append(train(net, train_dataset, use_cuda, args))
+        test_acc.append(test(net, test_dataset, use_cuda))
         print 'Each epoch costs ', time.time() - epoch_start
 
     # save the model
