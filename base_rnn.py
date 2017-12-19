@@ -8,7 +8,7 @@ import torch
 import torch.backends.cudnn as cudnn
 
 from data_loader import data_loader, fasttext_model_pretraining
-from model import LSTMModel, CNN_LSTMModel
+from model import LSTMModel, CNN_LSTMModel, GRU_LSTMModel
 from plot import plot
 from train import train, test
 
@@ -17,7 +17,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='PyTorch  Training')
     parser.add_argument('--feature_dim', default=100, type=int, help='feature dimension')
     parser.add_argument('--input_size', default=100, type=int, help='input size of lstm model')
-    parser.add_argument('--hidden_size', default=200, type=int, help='hidden size of lstm model')
+    parser.add_argument('--gru_hidden_size', default=150, type=int, help='hidden size of gru layer')
+    parser.add_argument('--lstm_hidden_size', default=200, type=int, help='hidden size of lstm layer')
     parser.add_argument('--max_epoch', default=100, type=int, help='max_epoch')
     parser.add_argument('--batch_size', default=16, type=int, help='batch size')
     parser.add_argument('--window_size', default=10, type=int, help='window size')
@@ -52,7 +53,7 @@ if __name__ == '__main__':
 
     # build model
     print 'Building model...'
-    net = CNN_LSTMModel(args)
+    net = GRU_LSTMModel(args)
 
     if use_cuda:
         net.cuda()

@@ -454,7 +454,7 @@ def data_loader(model, args):
     :param args:
     :return:
     '''
-    pkl_path = 'pklsets_cnn' + '_bs%d_ws%d_ti%d/' % (args.batch_size, args.window_size, args.time_interval)
+    pkl_path = 'pklsets_gru' + '_bs%d_ws%d_ti%d/' % (args.batch_size, args.window_size, args.time_interval)
     TrainDatasetFile = pkl_path + 'TrainDataset.pkl'
     TestDatasetFile = pkl_path + 'TestDataset.pkl'
     # if train_dataset and test_dataset exists, load from files

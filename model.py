@@ -7,24 +7,24 @@ class LSTMModel(nn.Module):
     def __init__(self, args):
         super(LSTMModel, self).__init__()
         self.input_size = args.input_size
-        self.hidden_size = args.hidden_size
+        self.lstm_hidden_size = args.lstm_hidden_size
         self.batch_size = args.batch_size
 
 
-        self.lstm = nn.LSTM(args.input_size, args.hidden_size, batch_first=True)
+        self.lstm = nn.LSTM(args.input_size, args.lstm_hidden_size, batch_first=True)
         self.fc1 = nn.Linear(args.hidden_size, 3)
         self.softmax = nn.LogSoftmax()
 
     def forward(self, inputs):
-        # sequence: (window_size, batch_size, max_len, feature_dim)
+        # sequence: (batch_size, window_size, feature_dim)
         self.hidden = self.init_hidden()
         _, self.hidden = self.lstm(inputs, self.hidden)
         output = self.softmax(self.fc1(self.hidden[0][0]))
         return output
 
     def init_hidden(self):
-        result = (Variable(torch.zeros(1, self.batch_size, self.hidden_size)),
-                Variable(torch.zeros(1, self.batch_size, self.hidden_size)))
+        result = (Variable(torch.zeros(1, self.batch_size, self.lstm_hidden_size)),
+                Variable(torch.zeros(1, self.batch_size, self.lstm_hidden_size)))
         return result
 
 
@@ -41,8 +41,8 @@ class CNN_LSTMModel(nn.Module):
         self.dropout = nn.Dropout(args.dropout)
         self.fc1 = nn.Linear(len(Ks)*Co, args.input_size)
 
-        self.lstm = nn.LSTM(args.input_size, args.hidden_size, batch_first=True)
-        self.fc2 = nn.Linear(args.hidden_size, 3)
+        self.lstm = nn.LSTM(args.input_size, args.lstm_hidden_size, batch_first=True)
+        self.fc2 = nn.Linear(args.lstm_hidden_size, 3)
         self.softmax = nn.LogSoftmax()
 
     def forward(self, x):
@@ -66,7 +66,47 @@ class CNN_LSTMModel(nn.Module):
         return output
 
     def init_hidden(self):
-        result = (Variable(torch.zeros(1, self.args.batch_size, self.args.hidden_size)),
-                Variable(torch.zeros(1, self.args.batch_size, self.args.hidden_size)))
+        result = (Variable(torch.zeros(1, self.args.batch_size, self.args.lstm_hidden_size)),
+                Variable(torch.zeros(1, self.args.batch_size, self.args.lstm_hidden_size)))
+        return result
+
+
+
+
+class GRU_LSTMModel(nn.Module):
+    def __init__(self, args):
+        super(GRU_LSTMModel, self).__init__()
+        self.args = args
+
+        self.gru = nn.GRU(args.input_size, args.gru_hidden_size, batch_first=True)
+
+        self.lstm = nn.LSTM(args.gru_hidden_size, args.lstm_hidden_size)
+        self.fc2 = nn.Linear(args.lstm_hidden_size, 3)
+        self.softmax = nn.LogSoftmax()
+
+    def forward(self, x):
+        # x: Variable(batch_size, window_size, seq_len, feature_dim)
+        batch_size, windown_size = x.size(0), x.size(1)
+        gru_output = None   # would be (window_size, batch_size, gru_hidden_size)
+        self.gru_hidden = self.init_gru_hidden()
+        for w in range(windown_size):
+            _, gru_hidden = self.gru(x[:,w], self.gru_hidden)
+            if gru_output is None:
+                gru_output = gru_hidden
+            else:
+                gru_output = torch.cat((gru_output, gru_hidden),0)
+
+        self.lstm_hidden = self.init_lstm_hidden()
+        _, self.lstm_hidden = self.lstm(gru_output, self.lstm_hidden) # gru_output: (window_size, batch_size, gru_hidden_size) # in this case, window_size is the seq_len of lstm
+        output = self.softmax(self.fc2(self.lstm_hidden[0][0]))
+        return output
+
+    def init_gru_hidden(self):
+        result = Variable(torch.zeros(1, self.args.batch_size, self.args.gru_hidden_size))
+        return result
+
+    def init_lstm_hidden(self):
+        result = (Variable(torch.zeros(1, self.args.batch_size, self.args.lstm_hidden_size)),
+                Variable(torch.zeros(1, self.args.batch_size, self.args.lstm_hidden_size)))
         return result
 
